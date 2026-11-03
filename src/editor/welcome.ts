@@ -25,6 +25,8 @@ export function maybeShowWelcome(): void {
   const orb = el('div', 'lb-welcome-orb lb-orb');
   orb.append(el('div', 'lb-orb-field lb-orb-field-a'), el('div', 'lb-orb-field lb-orb-field-b'));
   orb.append(el('div', 'lb-orb-sheen'));
+  const orbGlow = el('div', 'lb-orb-glow');
+  orbGlow.append(orb);
   const title = el('h1', 'lb-welcome-title', 'Welcome to Cooky');
   title.id = 'lb-welcome-title';
   const lead = el('p', 'lb-welcome-lead', 'Three quick things, and you’re cutting.');
@@ -97,7 +99,7 @@ export function maybeShowWelcome(): void {
   go.type = 'submit';
   actions.append(skip, go);
 
-  card.append(orb, title, lead, nameLabel, tagLabel, preview, accentLabel, actions);
+  card.append(orbGlow, title, lead, nameLabel, tagLabel, preview, accentLabel, actions);
   overlay.append(card);
   document.body.append(overlay);
   requestAnimationFrame(() => name.focus());
