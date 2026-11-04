@@ -1,8 +1,14 @@
+<p align="center"><img src="./cooky-icon.png" alt="Cooky" width="168" /></p>
+<h1 align="center">Cooky</h1>
+<p align="center"><b>A Public Forum debate editor built on CardMirror: full NSDA cites from a link, evidence search, and case mode, in Verbatim .docx.</b></p>
 <p align="center">
-  <img src="./cooky-icon.png" alt="Cooky" width="160" />
+  <img src="https://img.shields.io/badge/TypeScript-strict-0B6B82?style=flat" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/Electron-desktop-22D3EE?style=flat" alt="Electron" />
+  <img src="https://img.shields.io/badge/based%20on-CardMirror%201.15-60A5FA?style=flat" alt="Based on CardMirror 1.15" />
+  <img src="https://img.shields.io/badge/license-PolyForm%20NC-A78BFA?style=flat" alt="PolyForm Noncommercial" />
 </p>
-
-# Cooky
+<p align="center"><a href="./COOKY.md">Features</a> · <a href="./COOKY.md#build">Build</a> · <a href="./LICENSE">License</a></p>
+<p align="center"><img src="docs/banner.jpg" alt="Cooky" /></p>
 
 **Cooky** is a debate editor for Public Forum, built on
 [CardMirror](https://github.com/ant981228/cardmirror) 1.15.0. It reads and
@@ -15,7 +21,8 @@ writes the same Verbatim `.docx` files and adds:
   as they were cut.
 - **Case mode** — every card outlined by its argument role (uniqueness, link,
   internal link, impact), with missing pieces shown where they belong.
-- **Verbatim-style Shrink**, one-click **Save to Downloads**, a centered
+- **Verbatim-style Shrink**, one **Save** button that names new files and
+  keeps them in Documents/Cooky, a centered
   page view, and an Arc-inspired interface with your own accent color.
 
 See [COOKY.md](./COOKY.md) for the full feature list and build steps.
