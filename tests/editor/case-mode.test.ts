@@ -17,9 +17,12 @@ import {
 import { extractCards, insertableCard, scoreCard, terms } from '../../src/editor/evidence/caselist.js';
 
 const block = (t: string) => schema.nodes['block']!.create({ id: newHeadingId() }, schema.text(t));
+const pocket = (t: string) => schema.nodes['pocket']!.create({ id: newHeadingId() }, schema.text(t));
+const hat = (t: string) => schema.nodes['hat']!.create({ id: newHeadingId() }, schema.text(t));
+const para = (t: string) => schema.nodes['paragraph']!.create(null, schema.text(t));
 const card = (tag: string, body = 'text', cite?: string) =>
   schema.nodes['card']!.createChecked(null, [
-    schema.nodes['tag']!.create({ id: newHeadingId() }, schema.text(tag)),
+    schema.nodes['tag']!.create({ id: newHeadingId() }, tag ? schema.text(tag) : null),
     ...(cite ? [schema.nodes['cite_paragraph']!.create(null, schema.text(cite, [schema.marks['cite_mark']!.create()]))] : []),
     schema.nodes['card_body']!.create(null, schema.text(body)),
   ]);
@@ -36,6 +39,61 @@ describe('classifyTag', () => {
     expect(classifyTag('Tariffs are rising now', 0, 3)).toBe('uniqueness');
     expect(classifyTag('Affirming causes a trade war', 1, 3)).toBe('link');
     expect(classifyTag('Lack of coverage kills 45,000 people a year', 2, 3)).toBe('impact');
+  });
+});
+
+describe('telling arguments from formatting', () => {
+  it('skips a fill-in round title and takes the contention from "1. Escalation"', () => {
+    const d = doc(
+      pocket('Round __ of ___ Acton Boxborough SV(Pro __) vs ____(Con ___)'),
+      para('1. Escalation'),
+      card('Nuclear risks are rising now'),
+      card('Affirming escalates tensions with China'),
+    );
+    const cs = readCase(d);
+    expect(cs.map((c) => c.title)).toEqual(['Escalation']);
+    expect(cs[0]!.cards).toHaveLength(2);
+    const gaps = analyzeHeuristic(d).contentions[0]!.gaps;
+    expect(gaps.every((g) => !g.suggestion.includes('Round'))).toBe(true);
+  });
+
+  it('flags nothing while a contention\'s only card has no tag', () => {
+    const d = doc(pocket('Round __ of ___ X vs ___'), para('1. Escalation'), card('', 'body', 'SIPRI 26'));
+    const a = analyzeHeuristic(d);
+    expect(a.contentions[0]!.title).toBe('Escalation');
+    expect(a.contentions[0]!.gaps).toEqual([]);
+  });
+
+  it('reads role headings as labels for their cards, not as contentions', () => {
+    const d = doc(
+      hat('Contention 1: Economy'),
+      block('Uniqueness'),
+      card('Tariffs stay put'),
+      block('Link'),
+      card('Exports suffer'),
+      block('Impact'),
+      card('Jobs vanish'),
+    );
+    const cs = readCase(d);
+    expect(cs.map((c) => c.title)).toEqual(['Contention 1: Economy']);
+    expect(cs[0]!.cards.map((k) => k.role)).toEqual(['uniqueness', 'link', 'impact']);
+    expect(analyzeHeuristic(d).contentions[0]!.gaps).toEqual([]);
+  });
+
+  it('keeps sub-headings inside their "Contention N"', () => {
+    const d = doc(
+      pocket('Pro case'),
+      hat('Contention 1: Escalation'),
+      card('Tensions with China are rising now'),
+      block('Taiwan flashpoint'),
+      card('Affirming triggers a blockade'),
+      hat('Contention 2: Economy'),
+      card('Lack of trade kills 10,000 jobs'),
+    );
+    expect(readCase(d).map((c) => [c.title, c.cards.length])).toEqual([
+      ['Contention 1: Escalation', 2],
+      ['Contention 2: Economy', 1],
+    ]);
   });
 });
 

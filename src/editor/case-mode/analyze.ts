@@ -3,7 +3,13 @@
  * role in the argument chain, and find the pieces each contention is
  * missing.
  *
- * A contention is the run of cards under a pocket / hat / block heading.
+ * A contention is the run of cards under a contention label: a pocket /
+ * hat / block heading, or a short line such as "1. Escalation" or
+ * "Contention 2: Health". Headings that are only formatting are skipped:
+ * a fill-in title like "Round __ of __ … vs ___", or a heading that just
+ * names a role ("Uniqueness", "Link") — that one labels the cards under
+ * it instead. Sub-headings under a "Contention N" heading stay part of
+ * that contention, and cards with no tag aren't judged.
  * The chain a PF contention is expected to make is
  *
  *   uniqueness → link → (internal link) → impact
@@ -114,41 +120,108 @@ export function classifyTag(tag: string, index: number, count: number): ArgRole 
   return best[1] >= 0.75 ? best[0] : 'other';
 }
 
-const HEADING_TYPES = new Set(['pocket', 'hat', 'block']);
+const HEADING_LEVEL: Record<string, number> = { pocket: 1, hat: 2, block: 3 };
+
+/** A fill-in or document title, not an argument: "Round __ of ___ X vs ___". */
+export function isPlaceholderHeading(text: string): boolean {
+  const t = text.trim();
+  return !/[a-z]/i.test(t) || /_{2,}/.test(t) || /^round\b.*\bvs\.?\b/i.test(t);
+}
+
+/** A heading that only names a role ("Uniqueness", "UQ", "Link 2"). */
+export function headingRole(text: string): Exclude<ArgRole, 'other'> | null {
+  const t = text.trim().replace(/[\s:.\-–—]+$/, '');
+  if (t.length > 24) return null;
+  const m = /^(?:\[|\()?\s*(uq|uniq(?:ueness)?|non-?unique|n\/u|il|i\/l|internal\s*links?|links?|impacts?|imp|terminal\s*impacts?)\s*(?:\d+|[a-z])?\s*(?:\]|\))?$/i.exec(t);
+  if (!m) return null;
+  const w = m[1]!.toLowerCase().replace(/\s+/g, ' ');
+  if (/^(uq|uniq|non|n\/u)/.test(w)) return 'uniqueness';
+  if (/^(il|i\/l|internal)/.test(w)) return 'internal-link';
+  if (/^link/.test(w)) return 'link';
+  return 'impact';
+}
+
+const CONTENTION_LABEL = /^(?:contention|cont\.?|c|sub-?point|observation|obs?|advantage|adv)\s*\d+\b|^\d{1,2}\s*[.)]\s*\S|^framework\b|^(?:sub-?point|subpoint)\s+[a-z]\b/i;
+
+/** Contention label from a non-heading line, or null. Only short lines
+ *  count: "1. Escalation", "Contention 2: Health", or an auto-numbered
+ *  line with a few words and no sentence punctuation. */
+function lineLabel(node: PMNode): string | null {
+  const text = node.textContent.trim();
+  if (!text || text.length > 70 || text.split(/\s+/).length > 9) return null;
+  if (CONTENTION_LABEL.test(text)) return text;
+  if (node.attrs['numRole'] === 'number' && !/[.?!,;]$/.test(text)) return text;
+  return null;
+}
+
+/** "1. Escalation" → "Escalation"; named labels keep their text. */
+function cleanTitle(text: string): string {
+  return text.replace(/^\d{1,2}\s*[.)]\s*/, '').trim() || text.trim();
+}
 
 /** Group the doc's cards into contentions and classify each tag. */
 export function readCase(doc: PMNode): Contention[] {
   const out: Contention[] = [];
-  let current: Contention | null = null;
+  let current: (Contention & { level: number; named: boolean }) | null = null;
+  let hint: Exclude<ArgRole, 'other'> | null = null;
+  const hints = new Map<ArgCard, Exclude<ArgRole, 'other'>>();
+  const start = (title: string, pos: number, level: number) => {
+    current = { title: cleanTitle(title), pos, cards: [], gaps: [], level, named: CONTENTION_LABEL.test(title.trim()) };
+    out.push(current);
+    hint = null;
+  };
   doc.forEach((node, offset) => {
     const t = node.type.name;
-    if (HEADING_TYPES.has(t)) {
-      current = { title: node.textContent.trim() || 'Untitled', pos: offset, cards: [], gaps: [] };
-      out.push(current);
+    const level = HEADING_LEVEL[t];
+    if (level !== undefined) {
+      const text = node.textContent.trim();
+      if (isPlaceholderHeading(text)) return;
+      const role = headingRole(text);
+      if (role) {
+        hint = role;
+        return;
+      }
+      // A sub-heading under "Contention N" is part of that contention.
+      const cur = current as (Contention & { level: number; named: boolean }) | null;
+      if (cur && cur.named && cur.cards.length > 0 && level > cur.level && !CONTENTION_LABEL.test(text)) {
+        hint = null;
+        return;
+      }
+      start(text, offset, level);
       return;
     }
-    if (t !== 'card') return;
-    if (!current) {
-      current = { title: 'Case', pos: offset, cards: [], gaps: [] };
-      out.push(current);
+    if (t !== 'card') {
+      const label = lineLabel(node);
+      if (label) start(label, offset, 4);
+      return;
     }
-    current.cards.push({
+    if (!current) start('Case', offset, 4);
+    const card: ArgCard = {
       pos: offset,
       end: offset + node.nodeSize,
       tag: node.firstChild?.textContent.trim() ?? '',
       role: 'other',
-    });
+    };
+    current!.cards.push(card);
+    if (hint) hints.set(card, hint);
   });
   for (const c of out) {
     c.cards.forEach((card, i) => {
-      card.role = classifyTag(card.tag, i, c.cards.length);
+      if (!card.tag) return;
+      const labelled = LABELS.some(([re]) => re.test(card.tag));
+      const h = hints.get(card);
+      card.role = h && !labelled ? h : classifyTag(card.tag, i, c.cards.length);
     });
   }
-  return out.filter((c) => c.cards.length > 0);
+  return out
+    .filter((c) => c.cards.length > 0)
+    .map(({ title, pos, cards, gaps }) => ({ title, pos, cards, gaps }));
 }
 
 /** Gaps in a contention's chain from its roles alone. */
 export function findGaps(c: Contention): ArgGap[] {
+  // Nothing to judge until at least one card has a tag.
+  if (!c.cards.some((k) => k.tag)) return [];
   const has = (r: ArgRole) => c.cards.some((k) => k.role === r);
   const lastOf = (r: ArgRole) => [...c.cards].reverse().find((k) => k.role === r);
   const firstOf = (r: ArgRole) => c.cards.find((k) => k.role === r);
@@ -245,7 +318,7 @@ export function applyVerdict(contentions: Contention[], v: AiVerdict): CaseAnaly
   const flat = contentions.flatMap((c) => c.cards);
   for (const g of v.gaps) {
     const c = contentions[g.contention];
-    if (!c) continue;
+    if (!c || !c.cards.some((k) => k.tag)) continue;
     const afterCard = g.afterCard > 0 ? flat[g.afterCard - 1] : undefined;
     const at = afterCard && c.cards.includes(afterCard) ? afterCard.end : g.afterCard === 0 ? c.cards[0]!.pos : c.cards[c.cards.length - 1]!.end;
     c.gaps.push({ role: g.role, at, suggestion: g.suggestion || ROLE_NEED[g.role] });
