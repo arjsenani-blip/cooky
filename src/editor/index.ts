@@ -153,6 +153,7 @@ import {
  *  helpers further down would have been reached. */
 const MODE_SWITCH_MARKER_KEY = 'cardmirror:mode-switch-recovery';
 import { isAutosaveOnForPath, setAutosaveForPath } from './autosave-prefs-store.js';
+import { autosaveDelay, isOnBattery, watchBattery } from './autosave-pacing.js';
 import {
   settings,
   condenseWarningCloseFor,
@@ -7044,7 +7045,7 @@ function mountOpenedSingleDoc(args: {
   currentDocFilename = args.name;
   setCurrentDocHandle(args.handle ?? null);
   currentDocFormat = args.format;
-  // Restore this file's remembered autosave toggle (off if unknown).
+  // Restore this file's remembered autosave toggle (on unless turned off).
   settings.set('autosaveEnabled', isAutosaveOnForPath(args.handle));
   currentDocUid = newSessionDocUid();
   adoptDocId(args.docId, args.name, args.handle ?? null, args.format);
@@ -7204,7 +7205,7 @@ async function loadFileInPlace(file: {
   currentDocFilename = file.filename;
   setCurrentDocHandle(file.handle);
   currentDocFormat = file.format;
-  // Restore this file's remembered autosave toggle (off if unknown).
+  // Restore this file's remembered autosave toggle (on unless turned off).
   settings.set('autosaveEnabled', isAutosaveOnForPath(file.handle));
   currentDocUid = newSessionDocUid();
   adoptDocId(docId, file.filename, file.handle, file.format);
@@ -8059,6 +8060,8 @@ function commitSaveResult(filename: string, handle: unknown | null, format: 'cmi
     currentDocFilename = filename;
     setCurrentDocHandle(handle);
     currentDocFormat = format;
+    // A newly named file follows its own autosave preference (on by default).
+    settings.set('autosaveEnabled', isAutosaveOnForPath(handle));
   }
   // A (re)named doc that owns a live session republishes its title to
   // the room — a session started on an untitled doc gets its name the
@@ -9232,9 +9235,11 @@ function flashSaveSuccess(): void {
 // on successful save / explicit close. Drives the recovery modal
 // on startup.
 
-const AUTOSAVE_DELAY_MS = 5000;
 const JOURNAL_DELAY_MS = 3000;
 let autosaveTimer: number | null = null;
+/** When the first unsaved edit of the current autosave round landed;
+ *  caps how long a long typing burst can defer the save. */
+let autosavePendingSince: number | null = null;
 let journalTimer: number | null = null;
 // Write chains: with the gzip step async, two debounce rounds could
 // otherwise overlap in flight and land out of order (older bytes
@@ -9247,13 +9252,25 @@ let autosaveChain: Promise<void> = Promise.resolve();
  *  is true. Re-arms both the autosave debounce (when the setting is
  *  on) and the journal debounce (always, when supported). Cheap to
  *  fire unconditionally — each branch no-ops when its trigger
- *  condition isn't met. */
+ *  condition isn't met. Pacing (pause length, max wait, battery) lives
+ *  in autosave-pacing.ts. */
 export function notifyEditForAutosave(): void {
   scheduleJournalWrite();
   if (!settings.get('autosaveEnabled')) return;
+  const now = Date.now();
+  autosavePendingSince ??= now;
+  const format = activeFile().format === 'docx' ? 'docx' : 'cmir';
   if (autosaveTimer !== null) window.clearTimeout(autosaveTimer);
-  autosaveTimer = window.setTimeout(() => {
-    autosaveTimer = null;
+  autosaveTimer = window.setTimeout(fireAutosave, autosaveDelay(format, now, autosavePendingSince, isOnBattery()));
+}
+
+/** Run the pending autosave round now. A `.docx` rebuild is heavier, so
+ *  it waits for an idle moment between keystrokes (at most ~1.5s). */
+function fireAutosave(): void {
+  if (autosaveTimer !== null) window.clearTimeout(autosaveTimer);
+  autosaveTimer = null;
+  autosavePendingSince = null;
+  const run = () => {
     // .catch keeps the chain FULFILLED: runAutosaveAttempt handles its own
     // write errors, but a throw from its guard lines (before its try) used
     // to reject the chain — after which every later .then silently skipped
@@ -9265,8 +9282,24 @@ export function notifyEditForAutosave(): void {
           promptConflict: () => void runSaveFlow(),
         }),
       );
-  }, AUTOSAVE_DELAY_MS);
+  };
+  if (activeFile().format === 'docx' && typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(run, { timeout: 1500 });
+  } else {
+    run();
+  }
 }
+
+/** Leaving the window (another app, hidden, closing the lid) saves the
+ *  pending round right away instead of leaving a timer to wake later. */
+function flushPendingAutosave(): void {
+  if (autosaveTimer !== null) fireAutosave();
+}
+window.addEventListener('blur', flushPendingAutosave);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushPendingAutosave();
+});
+watchBattery();
 
 /** Schedule a debounced journal write for the SINGLE-DOC session.
  *  Multi-doc records run their own per-pane journal scheduling
@@ -9355,10 +9388,13 @@ function captureActiveDocCleanToken(): () => boolean {
 async function runAutosaveAttempt(): Promise<void> {
   if (!settings.get('autosaveEnabled')) return;
   const file = activeFile();
-  // Autosave only saves `.cmir` files. The toDocx path is too
-  // expensive for background firing; users keep manual control
-  // over when docx files hit disk.
-  if (file.format !== 'cmir' || !file.handle) return;
+  if (!file.format || !file.handle) return;
+  // Flattening live views / linked copies into Word needs the user's OK,
+  // which only the manual Save asks for — leave those docs to it.
+  if (file.format === 'docx') {
+    const links = activeSaveDocLiveLinkCounts();
+    if (links.views + links.copies > 0) return;
+  }
   if (!getHost().supportsInPlaceSave) return;
   // A recovered draft may only be written by a MANUAL save until its first
   // one lands — the stale-overwrite confirmation lives on the manual path,
@@ -9369,18 +9405,11 @@ async function runAutosaveAttempt(): Promise<void> {
     // Capture before serializing — keystrokes during the write are not
     // in the saved bytes and must keep the doc dirty + journaled.
     const commitClean = captureActiveDocCleanToken();
-    const bytes = await serializeForSave(
-      'cmir',
-      {
-        includeComments: true,
-        includeAnalytics: true,
-        includeUndertags: true,
-        readMode: false,
-      },
-      // Preserve the doc's identity on autosave (a saved .cmir already
-      // has one; without this the autosave write would strip it).
-      activeSavedDocId(),
-    );
+    // Nothing changed since the last save: skip the write entirely.
+    if (!multiDocActive && !currentDocDirty) return;
+    // Same bytes as a manual Save. Preserve the doc's identity (a saved
+    // file already has one; without it the autosave write would strip it).
+    const bytes = await serializeActiveForSave(file.format, activeSavedDocId() ?? ensureActiveDocId());
     // Same pre-write snapshot as the manual save path (see there).
     maybeSnapshotVersion(activeSavedDocId(), bytes, 'auto');
     // Watchdog without the dialog — never a modal mid-typing; the
@@ -9395,7 +9424,7 @@ async function runAutosaveAttempt(): Promise<void> {
       // write is non-destructive now, and a paused autosave would leave
       // edits unsaved for as long as the user failed to notice.
       if (!isFileChangedOnDiskError(err) || typeof file.handle !== 'string') throw err;
-      if (!(await keepBothForActiveFile({ handle: file.handle, filename: file.filename, format: 'cmir' }, bytes))) {
+      if (!(await keepBothForActiveFile({ handle: file.handle, filename: file.filename, format: file.format }, bytes))) {
         throw err;
       }
     }
@@ -9483,14 +9512,10 @@ function refreshAutosaveBtn(): void {
     autosaveBtn.dataset['autosaveEffective'] = 'false';
   } else {
     const file = activeFile();
-    const effective = file.format === 'cmir' && !!file.handle;
+    const effective = !!file.format && !!file.handle;
     autosaveBtn.dataset['autosaveEffective'] = effective ? 'true' : 'false';
     if (effective) {
-      label = 'Autosave is on — saves to .cmir every few seconds after edits';
-    } else if (file.format === 'docx') {
-      label =
-        'Autosave is on, but only fires for .cmir files (this doc is .docx). ' +
-        'Save As to .cmir to enable.';
+      label = 'Autosave is on — saves a few seconds after you stop typing (less often on battery)';
     } else {
       label = 'Autosave is on, but this doc has not been saved yet. Save once to enable.';
     }
@@ -9511,7 +9536,7 @@ if (autosaveBtn) {
       multiDocToggleAutosave();
       return;
     }
-    settings.set('autosaveEnabled', !settings.get('autosaveEnabled'));
+    ribbonContext.toggleAutosave();
   });
   // Initial state + live updates as the setting / focused doc changes.
   refreshAutosaveBtn();
