@@ -1190,7 +1190,20 @@ body {
 :is(.lb-ambient, .pmd-home-screen, .lb-welcome)::before {
   inset: -25%;
   background: var(--lb-mesh);
+}
+/* The window frame and home screen drift from ambient-drift.ts: same
+   keyframes, ~30 fps, paused while the window is in the background. */
+:is(.lb-ambient, .pmd-home-screen)::before {
+  transform: var(--lb-drift, none);
+  will-change: transform;
+}
+.lb-welcome::before {
   animation: lb-mesh-drift 32s ease-in-out infinite alternate;
+}
+/* The welcome screen keeps its CSS motion; just hold it in the background. */
+:root.lb-window-idle .lb-welcome::before,
+:root.lb-window-idle .lb-welcome::after {
+  animation-play-state: paused;
 }
 :is(.lb-ambient, .pmd-home-screen, .lb-welcome)::after {
   inset: -60px;

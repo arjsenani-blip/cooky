@@ -7,6 +7,7 @@
  */
 
 import { settings } from './settings.js';
+import { setupAmbientDrift } from './ambient-drift.js';
 
 export const DEFAULT_ACCENT = '#22d3ee';
 
@@ -110,6 +111,7 @@ export function setupAccent(): void {
     ambient.setAttribute('aria-hidden', 'true');
     document.body.prepend(ambient);
   }
+  setupAmbientDrift();
   let last = settings.get('accentColor');
   settings.subscribe((v) => {
     if (v.accentColor !== last) {
