@@ -470,12 +470,15 @@ export const marks: { [name: string]: MarkSpec } = {
       //      via `!important`. Catches Word's hyperlink blue
       //      (`0563C1`), user-picked dark grays / dark reds / etc.
       //      that would be invisible against the dark surface, and
-      //      keeps mid/high-luminance choices intact.
+      //      keeps mid/high-luminance choices intact. `--pmd-fc`
+      //      carries the color so that rule can lighten the run's own
+      //      hue instead of flattening every dark color to the text
+      //      color (blue stays blue, dark red stays red).
       const attrs: Record<string, string> = {
         'data-color': color,
         'data-color-band': colorBand(color),
       };
-      if (color !== '000000') attrs['style'] = `color: #${color}`;
+      if (color !== '000000') attrs['style'] = `color: #${color}; --pmd-fc: #${color}`;
       return ['span', attrs, 0];
     },
   },

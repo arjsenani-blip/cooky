@@ -261,7 +261,7 @@ describe('marks', () => {
     expect(attrsBlack['data-color']).toBe('000000');
     expect(attrsBlack['style']).toBeUndefined();
     expect(attrsColored['data-color']).toBe('FF0000');
-    expect(attrsColored['style']).toBe('color: #FF0000');
+    expect(attrsColored['style']).toBe('color: #FF0000; --pmd-fc: #FF0000');
   });
 
   it('font_color toDOM emits a luminance band for dark-mode contrast', () => {

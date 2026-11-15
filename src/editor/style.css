@@ -4094,6 +4094,9 @@ body.pmd-override-shading [data-shading] {
    leaking into chrome (settings dialogs, color pickers, etc.). */
 :root[data-theme="dark"][data-theme-doc="dark"] .ProseMirror [data-color-band="dark"] {
   color: var(--pmd-c-text) !important;
+  /* Keep the picked hue, lightened toward the text color until readable
+     (`--pmd-fc` is the run's own color, set by the font_color mark). */
+  color: color-mix(in oklab, var(--pmd-fc, var(--pmd-c-text)) 55%, var(--pmd-c-text)) !important;
 }
 
 /* Container scopes own text color inside their boundary, so a

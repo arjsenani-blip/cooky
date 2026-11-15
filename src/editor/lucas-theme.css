@@ -231,6 +231,12 @@ body.pmd-multi-doc #app {
 :root[data-theme="dark"]:not([data-theme-doc="dark"]) :is(#editor, .pmd-pane-editor, .pmd-pane-body) {
   background: var(--lb-card);
 }
+/* Theme applied to the document: the page goes dark with its text.
+   A white sheet under the dark theme's light text left documents (and
+   every dark font color) unreadable. */
+:root[data-theme="dark"][data-theme-doc="dark"] body.lb-page-view :is(#editor, .pmd-pane-editor) .ProseMirror {
+  background: #1b212b;
+}
 
 /* ── Toolbar ──────────────────────────────────────────────────────── */
 
