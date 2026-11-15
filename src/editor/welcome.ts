@@ -2,7 +2,7 @@
  * First-launch welcome: after the intro, ask for the user's name (the
  * home screen greets them with it) and their debate tag (the signature
  * every cite ends with), and an accent color (previewed live). All stay
- * editable in Settings → General → Cooky. Shown once; Skip counts as done.
+ * editable in Settings → General → Cleavo. Shown once; Skip counts as done.
  */
 
 import { settings } from './settings.js';
@@ -27,7 +27,7 @@ export function maybeShowWelcome(): void {
   orb.append(el('div', 'lb-orb-sheen'));
   const orbGlow = el('div', 'lb-orb-glow');
   orbGlow.append(orb);
-  const title = el('h1', 'lb-welcome-title', 'Welcome to Cooky');
+  const title = el('h1', 'lb-welcome-title', 'Welcome to Cleavo');
   title.id = 'lb-welcome-title';
   const lead = el('p', 'lb-welcome-lead', 'Three quick things, and you’re cutting.');
 
@@ -128,10 +128,10 @@ export function maybeShowWelcome(): void {
   });
 }
 
-/** "Good evening, Arjun" — or just "Cooky" before a name is set. */
+/** "Good evening, Arjun" — or just "Cleavo" before a name is set. */
 export function greeting(now: Date = new Date()): string {
   const name = settings.get('userName').trim();
-  if (!name) return 'Cooky';
+  if (!name) return 'Cleavo';
   const h = now.getHours();
   const part = h < 5 ? 'Up late' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
   return `${part}, ${name}`;

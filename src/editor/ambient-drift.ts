@@ -6,7 +6,7 @@
  * display's refresh rate (up to 120 Hz) for as long as the window is on
  * screen — focused or not. The layer is window-sized with soft-light grain
  * blended on top, so the GPU process re-blended the whole window ~120×/s
- * for a drift that moves well under a pixel per frame. That was Cooky's
+ * for a drift that moves well under a pixel per frame. That was Cleavo's
  * main battery drain.
  *
  * Same motion, cheaper: we compute the identical keyframes (32 s,

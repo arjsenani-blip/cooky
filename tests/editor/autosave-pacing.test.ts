@@ -30,11 +30,11 @@ describe('autosave preference', () => {
   beforeEach(() => localStorage.clear());
 
   it('is on for any saved file until turned off', () => {
-    expect(isAutosaveOnForPath('/Users/me/Documents/Cooky/aff.docx')).toBe(true);
-    setAutosaveForPath('/Users/me/Documents/Cooky/aff.docx', false);
-    expect(isAutosaveOnForPath('/Users/me/Documents/Cooky/aff.docx')).toBe(false);
-    setAutosaveForPath('/Users/me/Documents/Cooky/aff.docx', true);
-    expect(isAutosaveOnForPath('/Users/me/Documents/Cooky/aff.docx')).toBe(true);
+    expect(isAutosaveOnForPath('/Users/me/Documents/Cleavo/aff.docx')).toBe(true);
+    setAutosaveForPath('/Users/me/Documents/Cleavo/aff.docx', false);
+    expect(isAutosaveOnForPath('/Users/me/Documents/Cleavo/aff.docx')).toBe(false);
+    setAutosaveForPath('/Users/me/Documents/Cleavo/aff.docx', true);
+    expect(isAutosaveOnForPath('/Users/me/Documents/Cleavo/aff.docx')).toBe(true);
   });
 
   it('is off for an unsaved doc', () => {
