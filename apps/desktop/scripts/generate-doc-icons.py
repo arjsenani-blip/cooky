@@ -14,7 +14,7 @@ extension. Regenerate after changing build/icon.png:
     python3 scripts/generate-doc-icons.py
 
 Design: standard macOS document-icon language — white portrait page
-with a folded corner, the CardMirror mark centered, extension label
+with a folded corner, the app icon centered, extension label
 beneath.
 """
 

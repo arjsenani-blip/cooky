@@ -33,10 +33,6 @@ See [COOKY.md](./COOKY.md) for the full feature list and build steps.
 
 ---
 
-<p align="center">
-  <img src="./logo.png" alt="CardMirror" width="280" />
-</p>
-
 # CardMirror
 
 CardMirror is a debate text editor focused on high school and college
@@ -358,21 +354,19 @@ These all run inside the terminal pointed at the CardMirror folder
 
 ```
 npm test            # run all tests
-npm run test:bench  # performance benchmarks
 npm run typecheck   # strict TypeScript check
 ```
 
 ### Testing round-trip against your own .docx files
 
-The round-trip test suite and the round-trip benchmark both walk a
-folder of `.docx` fixtures and run universal preservation checks on
+The round-trip test suite walks a
+folder of `.docx` fixtures and runs universal preservation checks on
 each one (text length, heading IDs, mark counts, indent / spacing
-multisets, etc.). Point them at any folder by setting
+multisets, etc.). Point it at any folder by setting
 `CARDMIRROR_DOCS_DIR`:
 
 ```
 CARDMIRROR_DOCS_DIR="/path/to/your/docx/files" npm test
-CARDMIRROR_DOCS_DIR="/path/to/your/docx/files" npm run test:bench
 ```
 
 When the variable isn't set, the suite looks under
