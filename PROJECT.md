@@ -32,10 +32,9 @@ targets fidelity with both.
 | `README.md` | User-facing install and usage; build-from-source. |
 | `MANUAL.md` | The full user manual — every feature in plain terms. |
 | `CHANGELOG.md` | Release notes for users. |
-| `DETAILED_CHANGELOG.md` | The same releases with implementation notes for contributors. |
 | `src/` | The shared editor core — schema, importer/exporter, plugins, commands. |
 | `apps/desktop/` | The Electron desktop shell. |
-| `tests/`, `benchmarks/` | Round-trip and performance suites (point `CARDMIRROR_DOCS_DIR` at your own `.docx` fixtures). |
+| `tests/` | Round-trip and unit suites (point `CARDMIRROR_DOCS_DIR` at your own `.docx` fixtures). |
 
 New contributor: read this file, then `ARCHITECTURE.md`.
 

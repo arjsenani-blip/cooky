@@ -19,7 +19,6 @@
     "dev": "vite",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:bench": "vitest bench --run",
     "typecheck": "tsc --noEmit",
     "check:links": "node scripts/check-doc-links.mjs",
     "round-trip": "tsx bin/round-trip.ts",
@@ -31,9 +30,7 @@
     "desktop:dist": "npm --prefix apps/desktop run dist",
     "desktop:release": "npm --prefix apps/desktop run release",
     "postinstall": "patch-package",
-    "build:readtool": "esbuild src/tools/cardmirror-read-cli.ts --bundle --platform=node --format=cjs --outfile=packaging/cardmirror-read/cardmirror-read.cjs --log-level=warning",
-    "build:lite": "VITE_LITE=1 VITE_OUT_DIR=dist-lite vite build",
-    "verify:lite": "node scripts/verify-lite-bundle.mjs"
+    "build:readtool": "esbuild src/tools/cardmirror-read-cli.ts --bundle --platform=node --format=cjs --outfile=packaging/cardmirror-read/cardmirror-read.cjs --log-level=warning"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",

@@ -4,7 +4,7 @@ How CardMirror is built and why: the schema, the round-trip contract,
 the rendering model, the editing rules at node boundaries, and the
 roadmap. This is the design document for contributors. For per-command
 behavior, read the code; for what shipped when, read
-[`DETAILED_CHANGELOG.md`](./DETAILED_CHANGELOG.md).
+[`CHANGELOG.md`](./CHANGELOG.md).
 
 ---
 
