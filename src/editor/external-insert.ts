@@ -38,6 +38,8 @@ import { DOMParser as PMDOMParser, Fragment, Slice, type Node as PMNode } from '
 import { type EditorState, type Transaction } from 'prosemirror-state';
 import { ReplaceStep } from 'prosemirror-transform';
 import { newHeadingId } from '../schema/ids.js';
+import { detectPasteDialect } from './paste-dialect.js';
+import { convertWordHtml, convertHakuHtml, convertGoogleDocsHtml } from '../import/html-paste.js';
 import { nearestValidInsertPos } from './insert-position.js';
 import { markCiteTokensInText } from './cite-token-match.js';
 
@@ -230,6 +232,27 @@ export const EXTERNAL_INSERT_HTML_MAX_BYTES = 2 * 1024 * 1024;
  *  document text. Removed from the inert DOM before parsing. */
 const STRIP_SELECTOR = 'script, style, template, iframe, object, embed, noscript';
 
+/** A copy that starts inside a card (at its cite or body) serializes the
+ *  card OPEN — `<div class="pmd-card">` holding cite/body paragraphs but
+ *  no `<h4 class="pmd-tag">`. A doc-level parse would invent an empty
+ *  tag for it, landing a headless-looking card with the copied content
+ *  spilled after it. Unwrap such containers so their children insert
+ *  as body content at the nearest valid slot (inside the cursor's card
+ *  when there is one). */
+function unwrapHeadlessContainers(root: HTMLElement): void {
+  const heads: Array<[string, string]> = [
+    ['div.pmd-card', 'pmd-tag'],
+    ['div.pmd-analytic-unit', 'pmd-analytic'],
+  ];
+  for (const [sel, headClass] of heads) {
+    for (const el of Array.from(root.querySelectorAll(sel))) {
+      const first = el.firstElementChild;
+      if (first && first.classList.contains(headClass)) continue;
+      el.replaceWith(...Array.from(el.childNodes));
+    }
+  }
+}
+
 /**
  * Build the insertion transaction for an /insert call carrying `html`.
  *
@@ -265,25 +288,57 @@ export function buildExternalRichInsertTransaction(
     const inert = document.implementation.createHTMLDocument('external-insert');
     inert.body.innerHTML = html;
     for (const el of inert.body.querySelectorAll(STRIP_SELECTOR)) el.remove();
+    unwrapHeadlessContainers(inert.body);
     body = inert.body;
   } catch {
     return null;
   }
 
-  let slice: Slice;
+  // Word / Google Docs / haku HTML (a sender forwarding a clipboard it
+  // read from one of those): the same smart conversion a keyboard paste
+  // runs — the schema's parse rules know none of their spellings.
+  let converted: PMNode | null = null;
   try {
-    slice = PMDOMParser.fromSchema(state.schema).parseSlice(body);
+    const dialect = detectPasteDialect(html);
+    converted =
+      dialect === 'word'
+        ? convertWordHtml(html)
+        : dialect === 'haku'
+          ? convertHakuHtml(html)
+          : dialect === 'gdocs'
+            ? convertGoogleDocsHtml(html)
+            : null;
   } catch {
-    return null;
+    converted = null;
+  }
+
+  let slice: Slice;
+  if (converted && converted.content.size) {
+    slice = new Slice(converted.content, 0, 0);
+  } else {
+    try {
+      slice = PMDOMParser.fromSchema(state.schema).parseSlice(body);
+    } catch {
+      return null;
+    }
   }
   if (slice.content.size === 0) return null;
 
   // Purely inline content (a styled run, no block structure): honor the
-  // inline/newParagraph contract the text path has.
+  // inline/newParagraph contract the text path has. A single plain body
+  // paragraph counts as inline content too — that is how our own copy
+  // of a few words (`<p class="pmd-card-body" data-pm-slice=…>`) and a
+  // converted Docs/Word phrase arrive; treating it as a block landed a
+  // new paragraph even for an inline (`newParagraph: false`) insert.
   let allInline = true;
   slice.content.forEach((n) => {
     if (!n.isInline) allInline = false;
   });
+  const single = slice.content.childCount === 1 ? slice.content.firstChild! : null;
+  if (!allInline && single && (single.type.name === 'card_body' || single.type.name === 'paragraph') && single.content.size > 0) {
+    slice = new Slice(single.content, 0, 0);
+    allInline = true;
+  }
   if (allInline) {
     if (!newParagraph) {
       const tr = state.tr.replaceSelection(new Slice(slice.content, 0, 0));
@@ -313,10 +368,14 @@ export function buildExternalRichInsertTransaction(
   // well-formed (the parser fills required children — a card always
   // gets its tag), then drop the children at the content-aware slot.
   let docNode: PMNode;
-  try {
-    docNode = PMDOMParser.fromSchema(state.schema).parse(body);
-  } catch {
-    return null;
+  if (converted && converted.content.size) {
+    docNode = converted;
+  } else {
+    try {
+      docNode = PMDOMParser.fromSchema(state.schema).parse(body);
+    } catch {
+      return null;
+    }
   }
   if (docNode.content.size === 0) return null;
   const content = docNode.content;

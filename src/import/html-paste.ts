@@ -206,7 +206,12 @@ function parseStyleDict(dom: Document): StyleDict {
     });
   };
   for (const styleEl of Array.from(dom.querySelectorAll('style'))) {
-    const cssText = (styleEl.textContent ?? '').replace(/<!--|-->/g, '');
+    // Drop the HTML comment guards AND CSS comments: Word heads its
+    // rule groups with `/* Style Definitions */`, which would otherwise
+    // glue onto the first selector of the following rule and hide it.
+    const cssText = (styleEl.textContent ?? '')
+      .replace(/<!--|-->/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '');
     for (const m of cssText.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
       const selectors = m[1]!;
       const body = m[2]!;
@@ -464,6 +469,21 @@ function collectRuns(block: Element, dict: StyleDict): HtmlRun[] {
   return runs;
 }
 
+/** HTML whitespace semantics at block edges: the collapsed source
+ *  whitespace around a block's content (Word line-wraps its markup;
+ *  the clipboard fragment sits between newlines) renders as nothing, so
+ *  it must not import as a leading/trailing space. Plain spaces only —
+ *  NBSPs are authored content. Empty runs are dropped. */
+function trimRunEdges(runs: HtmlRun[]): void {
+  while (runs.length && runs[0]!.text.replace(/^ +/, '') === '') runs.shift();
+  if (runs.length) runs[0] = { ...runs[0]!, text: runs[0]!.text.replace(/^ +/, '') };
+  while (runs.length && runs[runs.length - 1]!.text.replace(/ +$/, '') === '') runs.pop();
+  if (runs.length) {
+    const last = runs[runs.length - 1]!;
+    runs[runs.length - 1] = { ...last, text: last.text.replace(/ +$/, '') };
+  }
+}
+
 /** Direct-formatted cites: when a non-heading paragraph LEADS with a
  *  bold 13pt run (the ecosystem's cite convention — haku's cite lead
  *  span, hand-formatted Word cites), every bold-13pt run in the
@@ -494,9 +514,15 @@ function runsToInlines(runs: HtmlRun[], nodeType: string): PMNode[] {
     const marks: Mark[] = [];
     if (rs.charMark) marks.push(schema.marks[rs.charMark]!.create());
     if (rs.boxed && !rs.charMark) marks.push(schema.marks['emphasis_mark']!.create());
-    if (rs.bold === true) marks.push(schema.marks['bold']!.create());
+    // The Emphasis style renders bold + underlined; when the run IS
+    // emphasis (named, or identified by its box), the bold/underline the
+    // source spelled out are the style's own rendering — Word's
+    // `em {font-weight:bold; text-decoration:underline; border:…}` rule —
+    // not user formatting, so they must not ride along as direct marks.
+    const emphasis = rs.charMark === 'emphasis_mark' || (rs.boxed && !rs.charMark);
+    if (rs.bold === true && !emphasis) marks.push(schema.marks['bold']!.create());
     if (rs.italic) marks.push(schema.marks['italic']!.create());
-    if (rs.underline && rs.charMark !== 'underline_mark') {
+    if (rs.underline && rs.charMark !== 'underline_mark' && !emphasis) {
       // Direct underline; normalizeUnderlineMarks promotes it to the
       // named style in body-like textblocks, same as the docx path.
       marks.push(schema.marks['underline_direct']!.create());
@@ -603,6 +629,7 @@ function collectParas(root: Element, dict: StyleDict, fixRuns?: (runs: HtmlRun[]
     const tag = el.tagName.toLowerCase();
     if (BLOCK_TAGS.has(tag)) {
       const runs = collectRuns(el, dict);
+      trimRunEdges(runs);
       // Whitespace-only paragraphs (Word's `<p class=MsoNormal><o:p>&nbsp;
       // </o:p></p>` spacers) import as EMPTY paragraphs, docx-parity.
       const meaningful = runs.some((r) => r.text.replace(/ /g, ' ').trim() !== '');
@@ -683,14 +710,48 @@ function convertViaImporter(html: string): PMNode | null {
   return hasDebateStructure(doc) ? doc : null;
 }
 
+/** A copy from INSIDE one paragraph: the source wrote bare inline runs
+ *  with no block element around them (Google Docs always; Word for a
+ *  partial-paragraph selection on some builds). One paragraph, marks
+ *  kept. Null when there is no text at all. */
+function inlineOnlyParas(
+  body: Element,
+  dict: StyleDict,
+  fixRuns?: (runs: HtmlRun[], nodeType: string) => void,
+): ParaInfo[] | null {
+  const runs = collectRuns(body, dict);
+  trimRunEdges(runs);
+  if (!runs.some((r) => r.text.trim())) return null;
+  applyCiteVisualRule(runs);
+  fixRuns?.(runs, 'paragraph');
+  return [{ nodeType: 'paragraph', inlines: runsToInlines(runs, 'paragraph'), headingId: null, pStyle: 'p', indent: 0, spacing: null }];
+}
+
 /**
- * Convert Word clipboard HTML into a CardMirror doc, or null when the
- * HTML contains no recognizable debate structure (caller falls through
- * to the default paste). The caller is responsible for routing — this
- * assumes `detectPasteDialect` already said 'word'.
+ * Convert Word clipboard HTML into a CardMirror doc. The caller is
+ * responsible for routing — this assumes `detectPasteDialect` already
+ * said 'word' (i.e. Word itself wrote the clipboard).
+ *
+ * A copy with no debate structure (a few lines of card text, a phrase
+ * from mid-paragraph) STILL converts, as plain paragraphs carrying their
+ * marks: the default paste path understands none of Word's spellings —
+ * `class=StyleUnderline` underlines, `mso-highlight` / `background`
+ * highlights, the `<em>` Emphasis box, pt font sizes — so falling
+ * through to it silently stripped exactly the formatting a debater
+ * copied the text for. Null only when there is no text, or when an
+ * unstructured copy contains a table or image (the default parser keeps
+ * those; the run converter would flatten them).
  */
 export function convertWordHtml(html: string): PMNode | null {
-  return convertViaImporter(html);
+  const structured = convertViaImporter(html);
+  if (structured) return structured;
+  if (/<(table|img)\b/i.test(html)) return null;
+  const dom = new DOMParser().parseFromString(html, 'text/html');
+  const dict = parseStyleDict(dom);
+  let paras: ParaInfo[] | null = trimEdgeEmpties(collectParas(dom.body, dict));
+  if (!paras.length) paras = inlineOnlyParas(dom.body, dict);
+  if (!paras || !paras.length) return null;
+  return normalizeUnderlineMarks(assembleDoc(paras));
 }
 
 /**
@@ -726,14 +787,9 @@ export function convertGoogleDocsHtml(html: string): PMNode | null {
       }
     }
   };
-  let paras = trimEdgeEmpties(collectParas(dom.body, dict, docsEmphasis));
-  if (!paras.length) {
-    const runs = collectRuns(dom.body, dict);
-    if (!runs.some((r) => r.text.trim())) return null;
-    applyCiteVisualRule(runs);
-    docsEmphasis(runs);
-    paras = [{ nodeType: 'paragraph', inlines: runsToInlines(runs, 'paragraph'), headingId: null, pStyle: 'p', indent: 0, spacing: null }];
-  }
+  let paras: ParaInfo[] | null = trimEdgeEmpties(collectParas(dom.body, dict, docsEmphasis));
+  if (!paras.length) paras = inlineOnlyParas(dom.body, dict, docsEmphasis);
+  if (!paras) return null;
   return fixGapsInConvertedDoc(normalizeUnderlineMarks(assembleDoc(paras)));
 }
 

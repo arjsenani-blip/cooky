@@ -6,8 +6,8 @@
  * tests assert the same invariants the .docx import path guarantees:
  * tag-rooted card grouping, cite-mark-driven cite_paragraph slotting,
  * named-style mark mapping (including legacy ids), visual fallbacks,
- * numbering reconstruction from mso-list, and the "no structure found →
- * null" fall-through gate.
+ * numbering reconstruction from mso-list, and unstructured copies
+ * converting as plain marked paragraphs.
  */
 import { describe, expect, it } from 'vitest';
 import { type Node as PMNode } from 'prosemirror-model';
@@ -122,12 +122,26 @@ describe('convertWordHtml — structure', () => {
     expect(marksAt(doc, 'direct underline')).toEqual(['underline_mark']);
   });
 
-  it('no debate structure → null (falls through to the default paste)', () => {
+  it('no debate structure → still converts, as plain paragraphs keeping their marks', () => {
+    // The default paste path understands none of Word's spellings, so
+    // falling through to it stripped the formatting a debater copied
+    // card text for. Word wrote the clipboard (the shell), so convert.
+    const doc = convertWordHtml(
+      wordDoc(`<p class=MsoNormal>Just a plain paragraph.</p><p class=MsoNormal>Another one with <b>bold</b>.</p>`),
+    )!;
+    expect(doc).not.toBeNull();
+    expect(blocksOf(doc)).toEqual([
+      ['paragraph', 'Just a plain paragraph.'],
+      ['paragraph', 'Another one with bold.'],
+    ]);
+    expect(marksAt(doc, 'bold')).toEqual(['bold']);
+  });
+
+  it('an unstructured copy containing a table or image → null (default parser keeps those)', () => {
     expect(
-      convertWordHtml(
-        wordDoc(`<p class=MsoNormal>Just a plain paragraph.</p><p class=MsoNormal>Another one with <b>bold</b>.</p>`),
-      ),
+      convertWordHtml(wordDoc(`<table><tr><td><p class=MsoNormal>a</p></td><td><p class=MsoNormal>b</p></td></tr></table>`)),
     ).toBeNull();
+    expect(convertWordHtml(wordDoc(`<p class=MsoNormal>x<img src="file:///clip_image001.png"></p>`))).toBeNull();
   });
 });
 

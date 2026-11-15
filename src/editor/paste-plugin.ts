@@ -59,6 +59,7 @@ import { buildImageNodeFromBlob, insertImageNode } from './image-insert.js';
 import { fragmentHasZone, flattenZonesInSlice, enclosingZonePos } from './transclusion.js';
 import { recallLinkedCopy } from './clipboard-link-cache.js';
 import { detectPasteDialect } from './paste-dialect.js';
+import { normalizePdfPlainText, isPdfTextLayerHtml } from './pdf-text-reflow.js';
 import { surfaceError } from './error-surface.js';
 import { convertWordHtml, convertHakuHtml, convertGoogleDocsHtml } from '../import/html-paste.js';
 import {
@@ -124,12 +125,18 @@ const SINGLE_LINE_PASTE_PARENTS = new Set<string>([
  *  single-line contexts (`SINGLE_LINE_PASTE_PARENTS`), collapse any
  *  whitespace run (newlines, tabs, repeated spaces) to a single space
  *  and trim the edges. In multi-paragraph contexts (`card_body`,
- *  `paragraph`, etc.) intentional paragraph splits survive. */
+ *  `paragraph`, etc.) intentional paragraph splits survive.
+ *
+ *  First of all, PDF-viewer copies are repaired (pdf-text-reflow.ts):
+ *  ligatures expanded, line-end hyphenation joined, and — only when the
+ *  text looks like hard-wrapped prose — soft-wrapped lines rejoined into
+ *  paragraphs. Must run before the invisible-strip below, which would
+ *  otherwise eat the soft hyphen that marks a line-end word break. */
 export function normalizeClipboardTextForPaste(
   text: string,
   parentTypeName: string,
 ): string {
-  const cleaned = text
+  const cleaned = normalizePdfPlainText(text)
     .replace(STRIPPABLE_INVISIBLES_RE, '')
     .replace(UNICODE_BREAKS_RE, '\n')
     .replace(FOLDABLE_SPACES_RE, ' ');
@@ -368,6 +375,59 @@ export function applyPlainPasteFromText(
   if (ctx.condenseOnPaste()) condensePastedRange(view, pasteFrom, ctx);
 }
 
+/** A paste event with NO clipboardData, for re-running PM's paste
+ *  pipeline on a flavor we picked ourselves (`view.pasteText`). PM's
+ *  own default builds a `ClipboardEvent`, which not every environment
+ *  defines (jsdom) — fall back to a plain Event. */
+function bareClipboardEvent(): ClipboardEvent {
+  try {
+    return new ClipboardEvent('paste');
+  } catch {
+    return new Event('paste') as ClipboardEvent;
+  }
+}
+
+/** A paste event whose clipboardData carries the given flavors, for
+ *  pastes that read the clipboard themselves (the right-click menu's
+ *  Paste reads it over IPC / the async Clipboard API). PM's
+ *  `view.pasteHTML(html)` alone builds an event with NO clipboardData,
+ *  and every flavor-sniffing branch of `handlePaste` — smart conversion
+ *  of Word / Google Docs / haku HTML, the pdf.js text-layer reroute,
+ *  the structural reparse — reads `event.clipboardData`, so a menu
+ *  Paste silently skipped them all (Word/Docs formatting lost). Null
+ *  when the environment can't build one. */
+export function clipboardEventWithFlavors(flavors: { html?: string; text?: string }): ClipboardEvent | null {
+  const data: Record<string, string> = {};
+  if (flavors.html) data['text/html'] = flavors.html;
+  if (flavors.text) data['text/plain'] = flavors.text;
+  try {
+    const dt = new DataTransfer();
+    for (const [k, v] of Object.entries(data)) dt.setData(k, v);
+    const ev = new ClipboardEvent('paste', { clipboardData: dt });
+    if (ev.clipboardData && ev.clipboardData.getData('text/html') === (data['text/html'] ?? '')) return ev;
+  } catch {
+    /* no DataTransfer / ClipboardEvent constructor — try the shim */
+  }
+  try {
+    const ev = new Event('paste', { cancelable: true }) as ClipboardEvent;
+    Object.defineProperty(ev, 'clipboardData', {
+      value: { files: [], types: Object.keys(data), getData: (t: string) => data[t] ?? '' },
+    });
+    return ev;
+  } catch {
+    return null;
+  }
+}
+
+/** Paste explicit clipboard flavors through the editor's full paste
+ *  pipeline — same behavior as a keyboard Cmd/Ctrl+V of a clipboard
+ *  holding them. */
+export function pasteClipboardFlavors(view: EditorView, html: string, text: string): void {
+  const ev = clipboardEventWithFlavors({ html, text }) ?? undefined;
+  if (html) view.pasteHTML(html, ev);
+  else if (text) view.pasteText(text, ev);
+}
+
 /**
  * True when the clipboard's text flavors carry actual content — not
  * just markup wrapping the image flavor. Decides image-vs-text
@@ -470,6 +530,14 @@ export function buildPastePlugin(ctx: PastePluginCtx): Plugin<PluginState> {
       },
     },
     props: {
+      // Plain-text clipboards (PDF viewers put ONLY text/plain on the
+      // clipboard): repair PDF line wrapping before PM splits the text
+      // into one paragraph per line — see pdf-text-reflow.ts. Ordinary
+      // plain text fails the wrapped-prose gate and passes unchanged
+      // apart from the always-safe artifact cleanup.
+      transformPastedText(text) {
+        return normalizePdfPlainText(text);
+      },
       // Stamp every pasted heading with a fresh unique id. The clipboard
       // parser drops `data-id` (our `parseDOM.getAttrs` reads only
       // `indent`), so headings arrive with `id: null`; the nav pane keys
@@ -601,16 +669,34 @@ export function buildPastePlugin(ctx: PastePluginCtx): Plugin<PluginState> {
           return true;
         }
 
+        // pdf.js text-layer HTML (one positioned span per visual line):
+        // parsing it fuses the words at every line end. Re-run the paste
+        // from the text/plain flavor, which carries the line breaks — the
+        // re-entry has no clipboardData, so it takes the plain-text path
+        // (and its PDF reflow) and cannot loop back here.
+        {
+          const html = cd?.getData('text/html') ?? '';
+          const plain = cd?.getData('text/plain') ?? '';
+          if (plain.trim() && isPdfTextLayerHtml(html)) {
+            event.preventDefault();
+            view.pasteText(plain, bareClipboardEvent());
+            return true;
+          }
+        }
+
         // Smart paste conversion: clipboard HTML that carries a strong
         // source signature (Word's document shell; haku's builder
         // fingerprint — see paste-dialect.ts) converts through the docx
         // importer's assembly path into real CardMirror structure:
         // cards, cites, headings, named-style marks, highlights,
         // numbering. Runs AFTER the F2 branch (explicit plain paste
-        // always wins) and only when the setting is on. The converter
-        // returns null when it finds no debate structure, so a
+        // always wins) and only when the setting is on. The haku
+        // converter returns null when it finds no debate structure, so a
         // false-positive signature match falls through to the default
-        // paths — never to mangled output.
+        // paths — never to mangled output. Word and Google Docs
+        // signatures are definitive, and the default path drops their
+        // formatting, so those convert even without structure (marked
+        // plain paragraphs).
         if (ctx.smartPasteConversion()) {
           const html = cd?.getData('text/html') ?? '';
           const dialect = detectPasteDialect(html);
@@ -624,6 +710,17 @@ export function buildPastePlugin(ctx: PastePluginCtx): Plugin<PluginState> {
                   : null;
           if (converted && converted.content.size) {
             event.preventDefault();
+            // A single plain paragraph (a phrase or one paragraph copied
+            // from Docs / Word) pastes INLINE, open on both sides, like
+            // the default HTML paste: into a tag it extends the tag, mid-
+            // sentence it joins the sentence. As a closed paragraph it
+            // split the cursor's block — and out of a tag, its card.
+            const only = converted.childCount === 1 ? converted.firstChild! : null;
+            if (only && (only.type.name === 'paragraph' || only.type.name === 'card_body')) {
+              const tr = view.state.tr.replaceSelection(new Slice(Fragment.from(only), 1, 1));
+              view.dispatch(tr.scrollIntoView().setMeta('uiEvent', 'paste'));
+              return true;
+            }
             const convSlice = new Slice(converted.content, 0, 0);
             // Same insertion ladder as the default paths below: fit
             // into the cursor's card, else split the container, else

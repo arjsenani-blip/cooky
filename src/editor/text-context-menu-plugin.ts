@@ -31,6 +31,7 @@ import { cutInPlaceApplies, markCutInPlace } from './cut-in-place.js';
 import { getElectronHost } from './host/index.js';
 import { registerOpenContextMenu, clearOpenContextMenu } from './context-menu-registry.js';
 import { formatKeyForDisplay } from './ribbon-commands.js';
+import { pasteClipboardFlavors } from './paste-plugin.js';
 import { isRightClickContextMenu } from './context-menu-gate.js';
 
 export const textContextMenuPlugin: Plugin = new Plugin({
@@ -178,10 +179,11 @@ async function cutSelection(view: EditorView): Promise<void> {
 async function pasteFromClipboard(view: EditorView): Promise<void> {
   const deliver = (html: string, text: string): void => {
     view.focus();
-    if (html) view.pasteHTML(html);
-    else if (text) view.pasteText(text);
-    // Both empty: clipboard has nothing pasteable — do nothing,
-    // matching the keyboard shortcut's behavior.
+    // Both flavors ride on the event, so the menu Paste gets the same
+    // smart conversion / PDF handling as a keyboard paste. Both empty:
+    // clipboard has nothing pasteable — do nothing, matching the
+    // keyboard shortcut's behavior.
+    pasteClipboardFlavors(view, html, text);
   };
 
   const host = getElectronHost();
@@ -204,7 +206,10 @@ async function pasteFromClipboard(view: EditorView): Promise<void> {
       const clip = await navigator.clipboard.read();
       for (const item of clip) {
         if (item.types.includes('text/html')) {
-          deliver(await (await item.getType('text/html')).text(), '');
+          const plain = item.types.includes('text/plain')
+            ? await (await item.getType('text/plain')).text()
+            : '';
+          deliver(await (await item.getType('text/html')).text(), plain);
           return;
         }
       }
